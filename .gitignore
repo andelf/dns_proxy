@@ -1,3 +1,7 @@
-ebin
-deps
 *~
+.eunit
+deps
+*.o
+*.beam
+*.plt
+erl_crash.dump
