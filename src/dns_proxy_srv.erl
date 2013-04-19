@@ -29,6 +29,12 @@
 -define(DEBUG(Term), io:format("debug: ~p~n", [Term])).
 -define(DEBUG(What, Term), io:format("debug ~p: ~p~n", [What, Term])).
 
+-define(DNS_ADDRS, ["8.8.8.8", "8.8.4.4", 	% Google
+		    "156.154.70.1", "156.154.71.1", % Dnsadvantage
+		    "4.2.2.1", "4.2.2.2", "4.2.2.3",
+		    "4.2.2.4", "4.2.2.5", "4.2.2.6" %  GTEI DNS (now Verizon)
+		    ]).
+
 %%%===================================================================
 %%% API
 %%%===================================================================
@@ -45,8 +51,7 @@ start_link() ->
 
 test() ->
     Domain = "www.baidu.com",
-    io:format("ddddddddddddddddddebug: ~p~n",
-
+    io:format("debug: ~p~n",
 	      [ets:fun2ms(fun(#dns_rr{type=cname,domain=D}=R) when D =:= Domain -> R end)]).
 
 %%%===================================================================
@@ -129,6 +134,9 @@ handle_info({test_ok, From}, #state{sock=Sock,table=Tid} = State) ->
 				      end)),
 
     {noreply, State};
+handle_info({udp_error,_Sock,econnreset}, State) ->
+    io:format("!!! udp error ~p~n", [_Sock]),
+    {noreply, State};
 handle_info(_Info, State) ->
     io:format("unhandled message: ~p~n", [_Info]),
     {noreply, State}.
@@ -204,20 +212,21 @@ handle_dns_request(#dns_rec{header=#dns_header{qr=false,opcode='query'},
 			SendFunc(inet_dns:encode(dns_rec_requst_to_response(Packet)),
 				 normal);
 		    _  ->
-			query_google_and_send_response(Packet, SendFunc)
+			query_dns_and_send_response(Packet, SendFunc)
 		end
 	end,
     spawn(QuerySendFunc).
 
-query_google_and_send_response(Packet, SendFunc) ->
+query_dns_and_send_response(Packet, SendFunc) ->
     {ok, S} = gen_udp:open(0, [binary]),
-    gen_udp:send(S, "8.8.8.8", 53, inet_dns:encode(Packet)),
+    {ok, DNSServerIP} = inet:ip(random_select(?DNS_ADDRS)),
+    gen_udp:send(S, DNSServerIP, 53, inet_dns:encode(Packet)),
     receive
-	{udp, S, {8,8,8,8}, 53, Data} ->
-	    io:format("??? query google ok, sent response!~n"),
+	{udp, S, DNSServerIP, 53, Data} ->
+	    io:format("??? query ~p ok, sent response!~n", [DNSServerIP]),
 	    SendFunc(Data, normal)
-    after 1000 ->
-	    io:format("### query time out.~n")
+    after 2000 ->
+	    io:format("### query ~p time out.~n", [DNSServerIP])
     end,
     gen_udp:close(S).
 
@@ -302,3 +311,7 @@ dns_rec_requst_to_response(Packet) ->
 
 dns_rec_fill_answer(Packet, Answers) when is_list(Answers) ->
     Packet#dns_rec{anlist=Answers}.
+
+random_select(AList) ->
+    random:seed(now()),
+    lists:nth(random:uniform(length(AList)), AList).
