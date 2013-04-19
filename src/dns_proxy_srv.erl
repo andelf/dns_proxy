@@ -11,7 +11,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/0]).
+-export([start_link/0, sync/0]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -55,6 +55,9 @@ test() ->
     Domain = "www.baidu.com",
     io:format("debug: ~p~n",
 	      [ets:fun2ms(fun(#dns_rr{type=cname,domain=D}=R) when D =:= Domain -> R end)]).
+
+sync() ->
+    gen_server:call(?MODULE, {dump_db}).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -101,6 +104,9 @@ init([]) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
+handle_call({dump_db}, _From, #state{table=Tid} = State) ->
+    Reply = ets:tab2file(Tid, ?FILE_STORE),
+    {reply, Reply, State};
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
@@ -162,7 +168,7 @@ handle_info(_Info, State) ->
 %% @end
 %%--------------------------------------------------------------------
 terminate(_Reason, #state{sock=Sock, table=Tid}) ->
-    ets:tab2fie(Tid, ?FILE_STORE),
+    %% ets:tab2fie(Tid, ?FILE_STORE),
     gen_udp:close(Sock),
     ok.
 
