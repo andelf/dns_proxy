@@ -35,6 +35,8 @@
 		    "4.2.2.4", "4.2.2.5", "4.2.2.6" %  GTEI DNS (now Verizon)
 		    ]).
 
+-define(FILE_STORE, "./resolve.ets").
+
 %%%===================================================================
 %%% API
 %%%===================================================================
@@ -70,7 +72,14 @@ test() ->
 %% @end
 %%--------------------------------------------------------------------
 init([]) ->
-    Tid = ets:new(resolve_table, [bag, public, named_table, {keypos, #dns_rr.domain}]),
+    Tid = case ets:file2tab(?FILE_STORE) of
+	      {ok, Table} ->
+		  io:format("load table ~p from file~n", [Table]),
+		  Table;
+	      {error, _} ->
+		  ets:new(resolve_table, [bag, public, named_table,
+					  {keypos, #dns_rr.domain}])
+    end,
     case gen_udp:open(53, [binary, {active, true}]) of
 	{ok, Sock} ->
 	    {ok, #state{sock=Sock, table=Tid}};
@@ -152,7 +161,8 @@ handle_info(_Info, State) ->
 %% @spec terminate(Reason, State) -> void()
 %% @end
 %%--------------------------------------------------------------------
-terminate(_Reason, #state{sock=Sock}) ->
+terminate(_Reason, #state{sock=Sock, table=Tid}) ->
+    ets:tab2fie(Tid, ?FILE_STORE),
     gen_udp:close(Sock),
     ok.
 
