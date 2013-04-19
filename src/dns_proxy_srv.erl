@@ -191,6 +191,7 @@ handle_dns_packet(Data, SendFunc, Tid) ->
     #dns_rec{header=Header, qdlist=Questions, anlist=Answers,
 	     nslist=Authorities, arlist=Resources} = Packet,
     handle_dns_header(Header),
+    handle_dns_questions(Questions),
     case Header#dns_header.qr of
 	true ->
 	    %% this is response
@@ -209,8 +210,6 @@ handle_dns_packet(Data, SendFunc, Tid) ->
 		    SendFunc(inet_dns:encode(Packet3), cached)
 	    end
     end,
-
-    handle_dns_questions(Questions),
     %% io:format("got dns packet ~p~n", [Packet]),
     ok.
 
