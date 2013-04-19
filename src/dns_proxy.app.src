@@ -1,0 +1,12 @@
+{application, dns_proxy,
+ [
+  {description, ""},
+  {vsn, "1"},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib
+                 ]},
+  {mod, { dns_proxy_app, []}},
+  {env, []}
+ ]}.
