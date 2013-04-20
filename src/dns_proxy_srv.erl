@@ -29,13 +29,18 @@
 -define(DEBUG(Term), io:format("debug: ~p~n", [Term])).
 -define(DEBUG(What, Term), io:format("debug ~p: ~p~n", [What, Term])).
 
--define(DNS_ADDRS, ["8.8.8.8", "8.8.4.4", 	% Google
-		    "156.154.70.1", "156.154.71.1", % Dnsadvantage
-		    "4.2.2.1", "4.2.2.2", "4.2.2.3",
-		    "4.2.2.4", "4.2.2.5", "4.2.2.6" %  GTEI DNS (now Verizon)
-		    ]).
 
+%% -define(DNS_ADDRS, ["8.8.8.8", "8.8.4.4", 	% Google
+%% 		    "156.154.70.1", "156.154.71.1", % Dnsadvantage, returns bad
+%% 		    "4.2.2.1", "4.2.2.2", "4.2.2.3",
+%% 		    "4.2.2.4", "4.2.2.5", "4.2.2.6" %  GTEI DNS (now Verizon)
+%% 		    ]).
+
+-define(DNS_ADDRS, ["202.106.196.115", "202.106.0.20"]).
+
+-define(RESOLVE_TABLE, resolve_table).
 -define(FILE_STORE, "./resolve.ets").
+
 
 %%%===================================================================
 %%% API
@@ -53,8 +58,13 @@ start_link() ->
 
 test() ->
     Domain = "www.baidu.com",
+    Type = a,
+    Class = in,
     io:format("debug: ~p~n",
-	      [ets:fun2ms(fun(#dns_rr{type=cname,domain=D}=R) when D =:= Domain -> R end)]).
+	      [ets:fun2ms(fun(R=#dns_rr{domain=D, type=T, class=C}) when D =:= Domain,
+                                                                         T =:= Type; T =:= cname,
+                                                                         C =:= Class ->
+                                  R end)]).
 
 sync() ->
     gen_server:call(?MODULE, {dump_db}).
@@ -80,12 +90,12 @@ init([]) ->
 		  io:format("load table ~p from file~n", [Table]),
 		  Table;
 	      {error, _} ->
-		  ets:new(resolve_table, [bag, public, named_table,
+		  ets:new(?RESOLVE_TABLE, [bag, public, named_table,
 					  {keypos, #dns_rr.domain}])
     end,
     case gen_udp:open(53, [binary, {active, true}]) of
 	{ok, Sock} ->
-	    {ok, #state{sock=Sock, table=Tid}};
+	    {ok, #state{sock=Sock,table=Tid}};
 	{error, Reason} ->
 	    {stop, Reason}
     end.
@@ -104,8 +114,8 @@ init([]) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_call({dump_db}, _From, #state{table=Tid} = State) ->
-    Reply = ets:tab2file(Tid, ?FILE_STORE),
+handle_call({dump_db}, _From, #state{table=?RESOLVE_TABLE} = State) ->
+    Reply = ets:tab2file(?RESOLVE_TABLE, ?FILE_STORE),
     {reply, Reply, State};
 handle_call(_Request, _From, State) ->
     Reply = ok,
@@ -134,19 +144,16 @@ handle_cast(_Msg, State) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_info({udp, Sock, FromIP, FromPort, Data}, #state{sock=Sock,table=Tid} = State) ->
+handle_info({udp, Sock, FromIP, FromPort, Data}, #state{sock=Sock,table=?RESOLVE_TABLE} = State) ->
     io:format("got packet from ~p:~p~n", [FromIP, FromPort]),
-    handle_dns_packet(Data, fun(D, normal) ->
-				    gen_udp:send(Sock, FromIP, FromPort, D),
-				    save_dns_result_to_table(Tid, D);
-			       (D, cached) ->
-				    gen_udp:send(Sock, FromIP, FromPort, D)
-			    end, Tid),
+    spawn(fun() ->
+                  handle_dns_packet(Data, fun(D) -> gen_udp:send(Sock, FromIP, FromPort, D) end)
+          end),
     {noreply, State};
-handle_info({test_ok, From}, #state{sock=Sock,table=Tid} = State) ->
-    From ! ets:select(Tid, ets:fun2ms(fun(#dns_rr{type=cname,domain="www.baidu.com",data=Cname}=R) ->
-					 Cname
-				      end)),
+handle_info({test_ok, From}, #state{sock=Sock,table=?RESOLVE_TABLE} = State) ->
+    From ! ets:select(?RESOLVE_TABLE, ets:fun2ms(fun(#dns_rr{type=cname,domain="www.baidu.com",data=Cname}=R) ->
+                                                         Cname
+                                                 end)),
 
     {noreply, State};
 handle_info({udp_error,_Sock,econnreset}, State) ->
@@ -167,8 +174,8 @@ handle_info(_Info, State) ->
 %% @spec terminate(Reason, State) -> void()
 %% @end
 %%--------------------------------------------------------------------
-terminate(_Reason, #state{sock=Sock, table=Tid}) ->
-    %% ets:tab2fie(Tid, ?FILE_STORE),
+terminate(_Reason, #state{sock=Sock, table=?RESOLVE_TABLE}) ->
+    %% ets:tab2fie(?RESOLVE_TABLE, ?FILE_STORE),
     gen_udp:close(Sock),
     ok.
 
@@ -186,7 +193,7 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-handle_dns_packet(Data, SendFunc, Tid) ->
+handle_dns_packet(Data, SendFunc) ->
     {ok, Packet} = inet_dns:decode(Data),
     #dns_rec{header=Header, qdlist=Questions, anlist=Answers,
 	     nslist=Authorities, arlist=Resources} = Packet,
@@ -198,39 +205,23 @@ handle_dns_packet(Data, SendFunc, Tid) ->
 	    handle_dns_header(Header);
 	false ->
 	    %% this is a request
-	    case query_table_by_dns_query(Tid, Questions) of
+	    case query_table_by_dns_query(?RESOLVE_TABLE, Questions) of
 		[] ->
 		    handle_dns_request(Packet, SendFunc);
 		Cached ->
 		    io:format("!!! found in cache! items=~p~n", [length(Cached)]),
-                    %% io:format("got: ~p~n", [Cached]),
                     Packet1 = dns_rec_fill_answer(Packet, Cached),
-                    Packet2 = dns_rec_set_rcode(Packet1, 0),
+                    Packet2 = dns_rec_set_rcode(Packet1, 0), % NoError
                     Packet3 = dns_rec_requst_to_response(Packet2),
-		    SendFunc(inet_dns:encode(Packet3), cached)
+		    SendFunc(inet_dns:encode(Packet3))
 	    end
     end,
-    %% io:format("got dns packet ~p~n", [Packet]),
     ok.
 
 handle_dns_request(#dns_rec{header=#dns_header{qr=false,opcode='query'},
 			    qdlist=Queries} = Packet,
 		   SendFunc) ->
-    QuerySendFunc =
-	fun() ->
-		Qdlist = lists:filter(fun(#dns_query{type=aaaa}) -> false;
-					  (_)                     -> true
-				       end,
-				       Packet#dns_rec.qdlist),
-		case Qdlist of
-		    [] ->
-			SendFunc(inet_dns:encode(dns_rec_requst_to_response(Packet)),
-				 normal);
-		    _  ->
-			query_dns_and_send_response(Packet, SendFunc)
-		end
-	end,
-    spawn(QuerySendFunc).
+    query_dns_and_send_response(Packet, SendFunc).
 
 query_dns_and_send_response(Packet, SendFunc) ->
     {ok, S} = gen_udp:open(0, [binary]),
@@ -238,17 +229,23 @@ query_dns_and_send_response(Packet, SendFunc) ->
     gen_udp:send(S, DNSServerIP, 53, inet_dns:encode(Packet)),
     receive
 	{udp, S, DNSServerIP, 53, Data} ->
-	    io:format("??? query ~p ok, sent response!~n", [DNSServerIP]),
-	    SendFunc(Data, normal)
+            %% some china dns return bad format.
+            {ok, ReplyPacket} = inet_dns:decode(Data),
+            %% io:format("got dns reply packet ~p~n", [ReplyPacket]),
+            ReplyPacket1 = dns_rec_filter_bad_records(ReplyPacket),
+            ReplyData = inet_dns:encode(ReplyPacket1),
+	    SendFunc(ReplyData),
+            io:format("### query dns ~p ok, items=~p .~n", [DNSServerIP, length(ReplyPacket#dns_rec.anlist)]),
+            %% save to cache
+            save_dns_result_to_table(?RESOLVE_TABLE, ReplyPacket)
     after 2000 ->
-	    io:format("### query ~p time out.~n", [DNSServerIP])
+	    io:format("### query dns ~p time out.~n", [DNSServerIP])
     end,
     gen_udp:close(S).
 
 
 handle_dns_header(#dns_header{id=Id,qr=RespFlag,opcode=OpCode,rcode=RCode}) ->
     ok.
-
 
 handle_dns_questions([#dns_query{domain=Domain,type=Type,class=Class}|Rest]) ->
     io:format("query type:~p ~p~n", [Type, Domain]),
@@ -263,7 +260,6 @@ handle_dns_answers([#dns_rr{domain=Domain,type=Type,class=Class,
     handle_dns_answers(Rest);
 handle_dns_answers([]) ->
     ok.
-
 
 
 save_dns_result_to_table(T, Data)    when is_binary(Data) ->
@@ -281,7 +277,7 @@ save_dns_result_to_table(T, Packet) when is_record(Packet, dns_rec) ->
 
 query_table_by_dns_query(T, Query) when is_record(Query, dns_query) ->
     #dns_query{domain=Domain,type=Type,class=Class} = Query,
-    Result = table_query(T, Domain),
+    Result = table_query(T, Domain, Type, Class),
     fill_cname_query(T, Result);
 query_table_by_dns_query(T, [Query|Rest]=Queries) when is_list(Queries),
 						       is_record(Query, dns_query) ->
@@ -292,23 +288,28 @@ query_table_by_dns_query(_, []) ->
     [].
 
 
-fill_cname_query(Tid, [R|Rest]) ->
+fill_cname_query(?RESOLVE_TABLE, [R|Rest]) ->
     #dns_rr{type=Type, domain=Domain, data=Data} = R,
     case Type of
 	cname ->
-	    [R|fill_cname_query(Tid, table_query(Tid, Data))] ++
-		fill_cname_query(Tid, Rest);
+	    [R|fill_cname_query(?RESOLVE_TABLE, table_query(?RESOLVE_TABLE, Data))] ++
+		fill_cname_query(?RESOLVE_TABLE, Rest);
 	Other ->
-	    [R|fill_cname_query(Tid, Rest)]
+	    [R|fill_cname_query(?RESOLVE_TABLE, Rest)]
     end;
 fill_cname_query(_, []) ->
     [].
 
 
-table_query(Tid, Domain) ->
+table_query(?RESOLVE_TABLE, Domain) ->
     %% fun2ms is bad here
-    %% A = ets:select(Tid, [{{dns_rr,Domain,'_','_','_','_','_','_','_','_'},[],['$_']}]),
-    A = ets:select(Tid, ets:fun2ms(fun(R=#dns_rr{domain=D}) when D =:= Domain -> R end)),
+    ets:select(?RESOLVE_TABLE, [{{dns_rr,Domain,'_','_','_','_','_','_','_','_'},[],['$_']}]).
+
+table_query(?RESOLVE_TABLE, Domain, Type, Class) ->
+    %% fun2ms is bad here
+    A = ets:select(?RESOLVE_TABLE, ets:fun2ms(fun(R=#dns_rr{domain=D, type=T, class=C}) when D =:= Domain, T =:= Type, C =:= Class;
+                                                                                             D =:= Domain, T =:= cname, C =:= Class ->
+                                                      R end)),
     A.
 
 %% make ttl longer and store to a `bag`
@@ -330,3 +331,20 @@ dns_rec_fill_answer(Packet, Answers) when is_list(Answers) ->
 random_select(AList) ->
     random:seed(now()),
     lists:nth(random:uniform(length(AList)), AList).
+
+dns_rec_filter_bad_records(Response = #dns_rec{anlist=Records}) ->
+    Records1 = lists:filter(fun(#dns_rr{type=a, data={202,106,199,_}}) -> % chinaunicom, beijing
+                                    false;
+                               (#dns_rr{type=a, data={92,242,144,_}}) ->   % Dnsadvantage
+                                    false;
+                               %% (#dns_rr{type=soa}) -> % discard all soa records
+                               %%      false;
+                               (#dns_rr{}) ->
+                                    true
+                            end, Records),
+    case Records1 of
+        [] ->
+            dns_rec_set_rcode(Response#dns_rec{anlist=[]}, 3);
+        _ ->
+            Response#dns_rec{anlist=Records1}
+    end.
