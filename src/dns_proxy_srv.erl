@@ -30,13 +30,14 @@
 -define(DEBUG(What, Term), io:format("debug ~p: ~p~n", [What, Term])).
 
 
-%% -define(DNS_ADDRS, ["8.8.8.8", "8.8.4.4", 	% Google
-%% 		    "156.154.70.1", "156.154.71.1", % Dnsadvantage, returns bad
-%% 		    "4.2.2.1", "4.2.2.2", "4.2.2.3",
-%% 		    "4.2.2.4", "4.2.2.5", "4.2.2.6" %  GTEI DNS (now Verizon)
-%% 		    ]).
+-define(DNS_ADDRS, ["8.8.8.8", "8.8.4.4", 	% Google
+		    "156.154.70.1", "156.154.71.1", % Dnsadvantage, returns bad
+		    "4.2.2.1", "4.2.2.2", "4.2.2.3",
+		    "4.2.2.4", "4.2.2.5", "4.2.2.6", %  GTEI DNS (now Verizon)
+		    "202.106.196.115", "202.106.0.20" % china unicom
+		    ]).
 
--define(DNS_ADDRS, ["202.106.196.115", "202.106.0.20"]).
+%%-define(DNS_ADDRS, ["202.106.196.115", "202.106.0.20"]).
 
 -define(RESOLVE_TABLE, resolve_table).
 -define(FILE_STORE, "./resolve.ets").
@@ -147,14 +148,8 @@ handle_cast(_Msg, State) ->
 handle_info({udp, Sock, FromIP, FromPort, Data}, #state{sock=Sock,table=?RESOLVE_TABLE} = State) ->
     io:format("got packet from ~p:~p~n", [FromIP, FromPort]),
     spawn(fun() ->
-                  handle_dns_packet(Data, fun(D) -> gen_udp:send(Sock, FromIP, FromPort, D) end)
+                  handle_dns_data(Data, fun(D) -> gen_udp:send(Sock, FromIP, FromPort, D) end)
           end),
-    {noreply, State};
-handle_info({test_ok, From}, #state{sock=Sock,table=?RESOLVE_TABLE} = State) ->
-    From ! ets:select(?RESOLVE_TABLE, ets:fun2ms(fun(#dns_rr{type=cname,domain="www.baidu.com",data=Cname}=R) ->
-                                                         Cname
-                                                 end)),
-
     {noreply, State};
 handle_info({udp_error,_Sock,econnreset}, State) ->
     io:format("!!! udp error ~p~n", [_Sock]),
@@ -193,35 +188,36 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-handle_dns_packet(Data, SendFunc) ->
+handle_dns_data(Data, SendFunc) ->
     {ok, Packet} = inet_dns:decode(Data),
-    #dns_rec{header=Header, qdlist=Questions, anlist=Answers,
-	     nslist=Authorities, arlist=Resources} = Packet,
+    handle_dns_packet(Packet, SendFunc).
+
+handle_dns_packet(#dns_rec{header=Header, qdlist=Questions,
+			   nslist=_Authorities, arlist=_Resources} = Packet,
+		  SendFunc) ->
     handle_dns_header(Header),
     handle_dns_questions(Questions),
-    case Header#dns_header.qr of
-	true ->
-	    %% this is response
+    case {Header#dns_header.qr, Header#dns_header.opcode} of
+	{true, _} ->
+	    %% this is response, ignore
 	    handle_dns_header(Header);
-	false ->
-	    %% this is a request
+	{false, 'query'} ->
+	    %% this is a request, query
 	    case query_table_by_dns_query(?RESOLVE_TABLE, Questions) of
 		[] ->
-		    handle_dns_request(Packet, SendFunc);
+		    query_dns_and_send_response(Packet, SendFunc);
 		Cached ->
 		    io:format("!!! found in cache! items=~p~n", [length(Cached)]),
                     Packet1 = dns_rec_fill_answer(Packet, Cached),
                     Packet2 = dns_rec_set_rcode(Packet1, 0), % NoError
                     Packet3 = dns_rec_requst_to_response(Packet2),
 		    SendFunc(inet_dns:encode(Packet3))
-	    end
+	    end;
+	{false, Opcode} ->
+	    io:format("EEE unhandled Opcode: ~p~n", [Opcode])
     end,
+    % io:format("packet ~p", [Packet]),
     ok.
-
-handle_dns_request(#dns_rec{header=#dns_header{qr=false,opcode='query'},
-			    qdlist=Queries} = Packet,
-		   SendFunc) ->
-    query_dns_and_send_response(Packet, SendFunc).
 
 query_dns_and_send_response(Packet, SendFunc) ->
     {ok, S} = gen_udp:open(0, [binary]),
@@ -244,19 +240,19 @@ query_dns_and_send_response(Packet, SendFunc) ->
     gen_udp:close(S).
 
 
-handle_dns_header(#dns_header{id=Id,qr=RespFlag,opcode=OpCode,rcode=RCode}) ->
+handle_dns_header(#dns_header{id=_Id,qr=_RespFlag,opcode=_OpCode,rcode=_RCode}) ->
     ok.
 
 handle_dns_questions([#dns_query{domain=Domain,type=Type,class=Class}|Rest]) ->
-    io:format("query type:~p ~p~n", [Type, Domain]),
+    io:format("query type:~p ~p class:~p~n", [Type, Domain, Class]),
     handle_dns_questions(Rest);
 handle_dns_questions([]) ->
     ok.
 
 handle_dns_answers([#dns_rr{domain=Domain,type=Type,class=Class,
-			    cnt=Count,ttl=TTL,data=Data,tm=Time,
+			    cnt=_Count,ttl=_TTL,data=Data,tm=_Time,
 			    bm=_,func=_}|Rest]) ->
-    io:format("dns record ~p ~p ~p~n", [Type, Class, Domain]),
+    io:format("dns record ~p ~p ~p: ~p~n", [Type, Class, Domain, Data]),
     handle_dns_answers(Rest);
 handle_dns_answers([]) ->
     ok.
@@ -281,7 +277,7 @@ query_table_by_dns_query(T, Query) when is_record(Query, dns_query) ->
     fill_cname_query(T, Result);
 query_table_by_dns_query(T, [Query|Rest]=Queries) when is_list(Queries),
 						       is_record(Query, dns_query) ->
-    #dns_query{domain=Domain,type=Type,class=Class} = Query,
+    %% #dns_query{domain=Domain,type=Type,class=Class} = Query,
     lists:flatten([query_table_by_dns_query(T, Query),
 		   query_table_by_dns_query(T, Rest)]);
 query_table_by_dns_query(_, []) ->
@@ -289,12 +285,12 @@ query_table_by_dns_query(_, []) ->
 
 
 fill_cname_query(?RESOLVE_TABLE, [R|Rest]) ->
-    #dns_rr{type=Type, domain=Domain, data=Data} = R,
+    #dns_rr{type=Type, domain=_Domain, data=Data} = R,
     case Type of
 	cname ->
 	    [R|fill_cname_query(?RESOLVE_TABLE, table_query(?RESOLVE_TABLE, Data))] ++
 		fill_cname_query(?RESOLVE_TABLE, Rest);
-	Other ->
+	_Other ->
 	    [R|fill_cname_query(?RESOLVE_TABLE, Rest)]
     end;
 fill_cname_query(_, []) ->
@@ -303,14 +299,14 @@ fill_cname_query(_, []) ->
 
 table_query(?RESOLVE_TABLE, Domain) ->
     %% fun2ms is bad here
-    ets:select(?RESOLVE_TABLE, [{{dns_rr,Domain,'_','_','_','_','_','_','_','_'},[],['$_']}]).
+    ets:select(?RESOLVE_TABLE, ets:fun2ms(fun(R=#dns_rr{domain=D}) when D =:= Domain -> R end)).
 
 table_query(?RESOLVE_TABLE, Domain, Type, Class) ->
     %% fun2ms is bad here
-    A = ets:select(?RESOLVE_TABLE, ets:fun2ms(fun(R=#dns_rr{domain=D, type=T, class=C}) when D =:= Domain, T =:= Type, C =:= Class;
-                                                                                             D =:= Domain, T =:= cname, C =:= Class ->
-                                                      R end)),
-    A.
+    ets:select(?RESOLVE_TABLE, ets:fun2ms(fun(R=#dns_rr{domain=D, type=T, class=C})
+						when D =:= Domain, T =:= Type, C =:= Class;
+						     D =:= Domain, T =:= cname, C =:= Class ->
+						  R end)).
 
 %% make ttl longer and store to a `bag`
 dns_rr_set_ttl(Query, TTL) when is_record(Query, dns_rr), is_integer(TTL) ->
@@ -348,3 +344,4 @@ dns_rec_filter_bad_records(Response = #dns_rec{anlist=Records}) ->
         _ ->
             Response#dns_rec{anlist=Records1}
     end.
+
