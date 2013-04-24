@@ -86,8 +86,8 @@ init(Args) ->
 handle_call({'query', Domain, Class, Type}, _From, State = #state{sock=Sock, id=Id}) ->
     Packet = new_dns_query_packet(Id, Domain, Class, Type),
     Raw = inet_dns:encode(Packet),
-    gen_tcp:send(Sock, <<byte_size(Raw):16, Raw/binary>>),
-    
+    gen_tcp:send(Sock, <<(byte_size(Raw)):16, Raw/binary>>),
+    {reply, ok, State};
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.

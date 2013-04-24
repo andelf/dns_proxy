@@ -15,7 +15,7 @@
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-   terminate/2, code_change/3]).
+	 terminate/2, code_change/3]).
 
 -compile([export_all]).
 
@@ -145,7 +145,7 @@ handle_cast(_Msg, State) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_info({udp, Sock, FromIP, FromPort, Data}, #state{sock=Sock,table=?RESOLVE_TABLE} = State) ->
+handle_info({udp, Sock, FromIP, FromPort, Data}, #state{sock=Sock} = State) ->
     io:format("got packet from ~p:~p~n", [FromIP, FromPort]),
     spawn(fun() ->
                   handle_dns_data(Data, fun(D) -> gen_udp:send(Sock, FromIP, FromPort, D) end)
@@ -169,7 +169,7 @@ handle_info(_Info, State) ->
 %% @spec terminate(Reason, State) -> void()
 %% @end
 %%--------------------------------------------------------------------
-terminate(_Reason, #state{sock=Sock, table=?RESOLVE_TABLE}) ->
+terminate(_Reason, #state{sock=Sock}) ->
     %% ets:tab2fie(?RESOLVE_TABLE, ?FILE_STORE),
     gen_udp:close(Sock),
     ok.
@@ -203,7 +203,7 @@ handle_dns_packet(#dns_rec{header=Header, qdlist=Questions,
 	    handle_dns_header(Header);
 	{false, 'query'} ->
 	    %% this is a request, query
-	    case query_table_by_dns_query(?RESOLVE_TABLE, Questions) of
+	    case query_table_by_dns_query(Questions) of
 		[] ->
 		    query_dns_and_send_response(Packet, SendFunc);
 		Cached ->
@@ -233,7 +233,7 @@ query_dns_and_send_response(Packet, SendFunc) ->
 	    SendFunc(ReplyData),
             io:format("### query dns ~p ok, items=~p .~n", [DNSServerIP, length(ReplyPacket#dns_rec.anlist)]),
             %% save to cache
-            save_dns_result_to_table(?RESOLVE_TABLE, ReplyPacket)
+            save_dns_result_to_table(ReplyPacket)
     after 2000 ->
 	    io:format("### query dns ~p time out.~n", [DNSServerIP])
     end,
@@ -258,55 +258,60 @@ handle_dns_answers([]) ->
     ok.
 
 
-save_dns_result_to_table(T, Data)    when is_binary(Data) ->
+save_dns_result_to_table(Data) when is_binary(Data) ->
     {ok, Packet} = inet_dns:decode(Data),
-    save_dns_result_to_table(T, Packet);
-save_dns_result_to_table(T, Packet) when is_record(Packet, dns_rec) ->
+    save_dns_result_to_table(Packet);
+save_dns_result_to_table(Packet) when is_record(Packet, dns_rec) ->
     case Packet#dns_rec.anlist of
 	[] ->
 	    ok;
 	Records ->
-	    Records1 = lists:map(fun(R) -> dns_rr_set_ttl(R, 1000) end,
+	    Records1 = lists:map(fun dns_rr_to_table_obj/1,
 				 Records),
-	    ets:insert(T, Records1)
+	    ets:insert(?RESOLVE_TABLE, Records1)
     end.
 
-query_table_by_dns_query(T, Query) when is_record(Query, dns_query) ->
+query_table_by_dns_query([]) ->
+    [];
+query_table_by_dns_query(Query) when is_record(Query, dns_query) ->
     #dns_query{domain=Domain,type=Type,class=Class} = Query,
-    Result = table_query(T, Domain, Type, Class),
-    fill_cname_query(T, Result);
-query_table_by_dns_query(T, [Query|Rest]=Queries) when is_list(Queries),
+    Result = table_query(Domain, Type, Class),
+    fill_cname_query(Result);
+query_table_by_dns_query([Query|Rest]=Queries) when is_list(Queries),
 						       is_record(Query, dns_query) ->
     %% #dns_query{domain=Domain,type=Type,class=Class} = Query,
-    lists:flatten([query_table_by_dns_query(T, Query),
-		   query_table_by_dns_query(T, Rest)]);
-query_table_by_dns_query(_, []) ->
-    [].
+    lists:flatten([query_table_by_dns_query(Query),
+		   query_table_by_dns_query(Rest)]).
 
 
-fill_cname_query(?RESOLVE_TABLE, [R|Rest]) ->
+fill_cname_query([]) ->
+    [];
+fill_cname_query([R|Rest]) ->
     #dns_rr{type=Type, domain=_Domain, data=Data} = R,
     case Type of
 	cname ->
-	    [R|fill_cname_query(?RESOLVE_TABLE, table_query(?RESOLVE_TABLE, Data))] ++
-		fill_cname_query(?RESOLVE_TABLE, Rest);
+	    [R|fill_cname_query(table_query(Data))] ++
+		fill_cname_query(Rest);
 	_Other ->
-	    [R|fill_cname_query(?RESOLVE_TABLE, Rest)]
-    end;
-fill_cname_query(_, []) ->
-    [].
+	    [R|fill_cname_query(Rest)]
+    end.
 
-
-table_query(?RESOLVE_TABLE, Domain) ->
+table_query(Domain) ->
     %% fun2ms is bad here
-    ets:select(?RESOLVE_TABLE, ets:fun2ms(fun(R=#dns_rr{domain=D}) when D =:= Domain -> R end)).
+    table_query(Domain, a, in).
 
-table_query(?RESOLVE_TABLE, Domain, Type, Class) ->
+table_query(Domain, Type, Class) ->
+    Result = ets:select(?RESOLVE_TABLE,
+			ets:fun2ms(fun(R={{D, T, C}, _, _})
+					 when D =:= Domain, T =:= Type, C =:= Class;
+					      D =:= Domain, T =:= cname, C =:= Class ->
+					   R end)),
+    lists:map(fun table_obj_to_dns_rr/1, Result).
     %% fun2ms is bad here
-    ets:select(?RESOLVE_TABLE, ets:fun2ms(fun(R=#dns_rr{domain=D, type=T, class=C})
-						when D =:= Domain, T =:= Type, C =:= Class;
-						     D =:= Domain, T =:= cname, C =:= Class ->
-						  R end)).
+    %% ets:select(?RESOLVE_TABLE, ets:fun2ms(fun(R=#dns_rr{domain=D, type=T, class=C})
+    %% 						when D =:= Domain, T =:= Type, C =:= Class;
+    %% 						     D =:= Domain, T =:= cname, C =:= Class ->
+    %% 						  R end)).
 
 %% make ttl longer and store to a `bag`
 dns_rr_set_ttl(Query, TTL) when is_record(Query, dns_rr), is_integer(TTL) ->
@@ -345,3 +350,20 @@ dns_rec_filter_bad_records(Response = #dns_rec{anlist=Records}) ->
             Response#dns_rec{anlist=Records1}
     end.
 
+timestamp() ->
+    timestamp(now()).
+timestamp({M,S,_}) ->
+    M * 1000000 + S.
+
+dns_rr_to_table_obj(#dns_rr{domain=Domain, type=Type, class=Class, data=Data}) ->
+    %% key
+    %% {{domain(), dns_record_type(), class()}, data(), timestamp()}
+    {{Domain, Type, Class}, Data, timestamp()}.
+
+table_obj_to_dns_rr({{Domain, Type, Class}, Data, _T}) ->
+    #dns_rr{domain = Domain,
+	    type = Type,
+	    class = Class,
+	    ttl = 1024,
+	    data = Data}.
+    
