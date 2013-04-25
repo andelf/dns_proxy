@@ -257,7 +257,6 @@ handle_dns_answers([#dns_rr{domain=Domain,type=Type,class=Class,
 handle_dns_answers([]) ->
     ok.
 
-
 save_dns_result_to_table(Data) when is_binary(Data) ->
     {ok, Packet} = inet_dns:decode(Data),
     save_dns_result_to_table(Packet);
@@ -302,7 +301,7 @@ table_query(Domain) ->
 
 table_query(Domain, Type, Class) ->
     Result = ets:select(?RESOLVE_TABLE,
-			ets:fun2ms(fun(R={{D, T, C}, _, _})
+			ets:fun2ms(fun(R={{D, T, C}, _})
 					 when D =:= Domain, T =:= Type, C =:= Class;
 					      D =:= Domain, T =:= cname, C =:= Class ->
 					   R end)),
@@ -357,10 +356,10 @@ timestamp({M,S,_}) ->
 
 dns_rr_to_table_obj(#dns_rr{domain=Domain, type=Type, class=Class, data=Data}) ->
     %% key
-    %% {{domain(), dns_record_type(), class()}, data(), timestamp()}
-    {{Domain, Type, Class}, Data, timestamp()}.
+    %% {{domain(), dns_record_type(), class()}, data()}
+    {{Domain, Type, Class}, Data}.
 
-table_obj_to_dns_rr({{Domain, Type, Class}, Data, _T}) ->
+table_obj_to_dns_rr({{Domain, Type, Class}, Data}) ->
     #dns_rr{domain = Domain,
 	    type = Type,
 	    class = Class,
