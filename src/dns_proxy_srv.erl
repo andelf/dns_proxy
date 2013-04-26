@@ -42,7 +42,14 @@
 -define(RESOLVE_TABLE, resolve_table).
 -define(FILE_STORE, "./resolve.ets").
 
-
+-record(dns_record, {domain,
+		     type,
+		     class,
+		     data}).
+%% what really store to table
+-record(table_record, {dns_record,
+		       timestamp,
+		       visits=0}).		       
 %%%===================================================================
 %%% API
 %%%===================================================================
@@ -70,6 +77,7 @@ test() ->
 sync() ->
     gen_server:call(?MODULE, {dump_db}).
 
+
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
@@ -91,8 +99,8 @@ init([]) ->
 		  io:format("load table ~p from file~n", [Table]),
 		  Table;
 	      {error, _} ->
-		  ets:new(?RESOLVE_TABLE, [bag, public, named_table,
-					  {keypos, #dns_rr.domain}])
+		  ets:new(?RESOLVE_TABLE, [set, public, named_table,
+					   {keypos, #table_record.dns_record}])
     end,
     case gen_udp:open(53, [binary, {active, true}]) of
 	{ok, Sock} ->
@@ -295,23 +303,6 @@ fill_cname_query([R|Rest]) ->
 	    [R|fill_cname_query(Rest)]
     end.
 
-table_query(Domain) ->
-    %% fun2ms is bad here
-    table_query(Domain, a, in).
-
-table_query(Domain, Type, Class) ->
-    Result = ets:select(?RESOLVE_TABLE,
-			ets:fun2ms(fun(R={{D, T, C}, _})
-					 when D =:= Domain, T =:= Type, C =:= Class;
-					      D =:= Domain, T =:= cname, C =:= Class ->
-					   R end)),
-    lists:map(fun table_obj_to_dns_rr/1, Result).
-    %% fun2ms is bad here
-    %% ets:select(?RESOLVE_TABLE, ets:fun2ms(fun(R=#dns_rr{domain=D, type=T, class=C})
-    %% 						when D =:= Domain, T =:= Type, C =:= Class;
-    %% 						     D =:= Domain, T =:= cname, C =:= Class ->
-    %% 						  R end)).
-
 %% make ttl longer and store to a `bag`
 dns_rr_set_ttl(Query, TTL) when is_record(Query, dns_rr), is_integer(TTL) ->
     Query#dns_rr{ttl=TTL}.
@@ -354,15 +345,30 @@ timestamp() ->
 timestamp({M,S,_}) ->
     M * 1000000 + S.
 
+table_query(Domain) ->
+    %% fun2ms is bad here
+    table_query(Domain, a, in).
+
+table_query(Domain, Type, Class) ->
+    Result = ets:select(?RESOLVE_TABLE,
+			ets:fun2ms(fun(R = #table_record{
+					      dns_record=#dns_record{domain=D, type=T, class=C},
+					      timestamp=_T})
+					 when D =:= Domain, T =:= Type, C =:= Class;
+					      D =:= Domain, T =:= cname, C =:= Class ->
+					   R#table_record.dns_record end)),
+    lists:map(fun dns_record_to_dns_rr/1, Result).
+
 dns_rr_to_table_obj(#dns_rr{domain=Domain, type=Type, class=Class, data=Data}) ->
     %% key
-    %% {{domain(), dns_record_type(), class()}, data()}
-    {{Domain, Type, Class}, Data}.
+    %%{{Domain, Type, Class}, Data}.
+    #table_record{dns_record = #dns_record{domain=Domain, type=Type, class=Class, data=Data},
+		  timestamp = timestamp()
+		 }.
 
-table_obj_to_dns_rr({{Domain, Type, Class}, Data}) ->
+dns_record_to_dns_rr(#dns_record{domain=Domain, type=Type, class=Class, data=Data}) ->
     #dns_rr{domain = Domain,
 	    type = Type,
 	    class = Class,
 	    ttl = 1024,
 	    data = Data}.
-    
