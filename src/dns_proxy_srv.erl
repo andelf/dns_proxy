@@ -224,7 +224,7 @@ handle_dns_packet(#dns_rec{header=Header, qdlist=Questions,
 	{false, Opcode} ->
 	    io:format("EEE unhandled Opcode: ~p~n", [Opcode])
     end,
-    % io:format("packet ~p", [Packet]),
+    %% io:format("packet ~p", [Packet]),
     ok.
 
 query_dns_and_send_response(Packet, SendFunc) ->
