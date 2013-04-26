@@ -112,18 +112,19 @@ handle_dns_response(Sock, Id, Timeout) ->
 	    Packet;
 	{error, timeout} ->
 	    {error, timeout};
-	{'EXIT', _} ->
+	{'EXIT', _} = E->
 	    %% skip bad packets in buffer
+	    io:format("error ~p~n", [E]),
 	    handle_dns_response(Sock, Id, Timeout)
     end.
 
 
 receive_dns_response(Sock, Id, Timeout) ->
-    <<Size:16>> = gen_tcp:recv(Sock, 2),
+    {ok, <<Size:16>>} = gen_tcp:recv(Sock, 2, Timeout),
     io:format("size = ~p~n", [Size]),
     case gen_tcp:recv(Sock, Size) of
 	{ok, Data} ->
-	    {ok, Packet} = inet_dns:decode(Data),
+	    {ok, Packet} = inet_dns:decode(Data, Timeout),
 	    #dns_rec{header = #dns_header{id = Id, qr = true}} = Packet,
 	    {ok, Packet};
 	{error, timeout} ->
