@@ -121,7 +121,7 @@ handle_dns_response(Sock, Id, Timeout) ->
 
 receive_dns_response(Sock, Id, Timeout) ->
     case gen_udp:recv(Sock, 0, Timeout) of
-	{ok, {IP, Port, Data}} ->
+	{ok, {_IP, _Port, Data}} ->
 	    {ok, Packet} = inet_dns:decode(Data),
 	    #dns_rec{header = #dns_header{id = Id, qr = true}} = Packet,
 	    {ok, Packet};
