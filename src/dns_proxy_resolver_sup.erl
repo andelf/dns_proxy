@@ -11,7 +11,7 @@
 -behaviour(supervisor).
 
 %% API
--export([start_link/0,
+-export([start_link/0, query_raw/2, query_packet/2,
 	 query_domain/1, query_domain/2, query_domain/3, query_domain/4]).
 
 %% Supervisor callbacks
@@ -59,6 +59,20 @@ query_domain(PoolName, Domain, Type, Class) ->
 				gen_server:call(Worker, {sync_send_dns_packet, Packet1})
 			end).
 
+query_raw(PoolName, Raw) ->
+    Packet = inet_dns:decode(Raw),
+    poolboy:transaction(PoolName,
+			fun(Worker) ->
+				gen_server:call(Worker, {sync_send_dns_packet, Packet})
+			end).
+
+query_packet(PoolName, Packet) ->
+    poolboy:transaction(PoolName,
+			fun(Worker) ->
+				gen_server:call(Worker, {sync_send_dns_packet, Packet})
+			end).
+    
+    
 
 %%%===================================================================
 %%% Supervisor callbacks
@@ -79,7 +93,7 @@ query_domain(PoolName, Domain, Type, Class) ->
 %%--------------------------------------------------------------------
 init([]) ->
     Pools = [{udp_resolver_pool, [{worker_module, dns_proxy_udp_resolver},
-				  {size, 10}, {max_overflow, 10}],
+				  {size, 5}, {max_overflow, 5}],
 	      [{ip_pool, ?DNS_ADDRS}]},
 	     {tcp_resolver_pool, [{worker_module, dns_proxy_tcp_resolver},
 				  {size, 5}, {max_overflow, 10}],

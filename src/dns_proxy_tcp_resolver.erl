@@ -99,7 +99,7 @@ handle_call({sync_send_dns_packet, Packet}, _From, State =
 handle_dns_response(Sock, Id, Timeout) ->
     case catch receive_dns_response(Sock, Id, Timeout) of
 	{ok, Packet} ->
-	    Packet;
+	    {ok, Packet};
 	{error, timeout} ->
 	    {error, timeout};
 	{error, closed} -> 

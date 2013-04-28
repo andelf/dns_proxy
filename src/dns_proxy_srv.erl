@@ -64,16 +64,6 @@
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
-test() ->
-    Domain = "www.baidu.com",
-    Type = a,
-    Class = in,
-    io:format("debug: ~p~n",
-	      [ets:fun2ms(fun(R=#dns_rr{domain=D, type=T, class=C}) when D =:= Domain,
-                                                                         T =:= Type; T =:= cname,
-                                                                         C =:= Class ->
-                                  R end)]).
-
 sync() ->
     gen_server:call(?MODULE, {dump_db}).
 
@@ -154,13 +144,13 @@ handle_cast(_Msg, State) ->
 %% @end
 %%--------------------------------------------------------------------
 handle_info({udp, Sock, FromIP, FromPort, Data}, #state{sock=Sock} = State) ->
-    io:format("got packet from ~p:~p~n", [FromIP, FromPort]),
+    %% io:format("got packet from ~p:~p~n", [FromIP, FromPort]),
     spawn(fun() ->
                   handle_dns_data(Data, fun(D) -> gen_udp:send(Sock, FromIP, FromPort, D) end)
           end),
     {noreply, State};
 handle_info({udp_error,_Sock,econnreset}, State) ->
-    io:format("!!! udp error ~p~n", [_Sock]),
+    io:format("!!! udp error econnreset ~p~n", [_Sock]),
     {noreply, State};
 handle_info(_Info, State) ->
     io:format("unhandled message: ~p~n", [_Info]),
@@ -204,7 +194,6 @@ handle_dns_packet(#dns_rec{header=Header, qdlist=Questions,
 			   nslist=_Authorities, arlist=_Resources} = Packet,
 		  SendFunc) ->
     handle_dns_header(Header),
-    handle_dns_questions(Questions),
     case {Header#dns_header.qr, Header#dns_header.opcode} of
 	{true, _} ->
 	    %% this is response, ignore
@@ -215,11 +204,7 @@ handle_dns_packet(#dns_rec{header=Header, qdlist=Questions,
 		[] ->
 		    query_dns_and_send_response(Packet, SendFunc);
 		Cached ->
-		    io:format("!!! found in cache! items=~p~n", [length(Cached)]),
-                    Packet1 = dns_rec_fill_answer(Packet, Cached),
-                    Packet2 = dns_rec_set_rcode(Packet1, 0), % NoError
-                    Packet3 = dns_rec_requst_to_response(Packet2),
-		    SendFunc(inet_dns:encode(Packet3))
+		    fill_packet_and_send_response(Packet, Cached, SendFunc)
 	    end;
 	{false, Opcode} ->
 	    io:format("EEE unhandled Opcode: ~p~n", [Opcode])
@@ -227,25 +212,31 @@ handle_dns_packet(#dns_rec{header=Header, qdlist=Questions,
     %% io:format("packet ~p", [Packet]),
     ok.
 
-query_dns_and_send_response(Packet, SendFunc) ->
-    {ok, S} = gen_udp:open(0, [binary]),
-    {ok, DNSServerIP} = inet:ip(dns_utils:random_select(?DNS_ADDRS)),
-    gen_udp:send(S, DNSServerIP, 53, inet_dns:encode(Packet)),
-    receive
-	{udp, S, DNSServerIP, 53, Data} ->
-            %% some china dns return bad format.
-            {ok, ReplyPacket} = inet_dns:decode(Data),
+fill_packet_and_send_response(Packet=#dns_rec{qdlist=Questions}, Cached, SendFunc) ->
+    [#dns_query{domain=Domain,type=Type,class=Class}] = Questions,
+    io:format("%%% type:~p ~p class:~p found in cache! items=~p~n",
+	      [Type, Domain, Class, length(Cached)]),
+    Packet1 = dns_rec_fill_answer(Packet, Cached),
+    Packet2 = dns_rec_set_rcode(Packet1, 0), % NoError
+    Packet3 = dns_rec_requst_to_response(Packet2),
+    SendFunc(inet_dns:encode(Packet3)).
+
+query_dns_and_send_response(Packet=#dns_rec{qdlist=Questions}, SendFunc) ->
+    [#dns_query{domain=Domain,type=Type,class=Class}] = Questions,
+    case dns_proxy_resolver_sup:query_packet(tcp_resolver_pool, Packet) of
+	{ok, ReplyPacket} ->
             %% io:format("got dns reply packet ~p~n", [ReplyPacket]),
             ReplyPacket1 = dns_rec_filter_bad_records(ReplyPacket),
             ReplyData = inet_dns:encode(ReplyPacket1),
 	    SendFunc(ReplyData),
-            io:format("### query dns ~p ok, items=~p .~n", [DNSServerIP, length(ReplyPacket#dns_rec.anlist)]),
+            io:format("### type:~p ~p class:~p query ok, items=~p .~n",
+		      [Type, Domain, Class, length(ReplyPacket#dns_rec.anlist)]),
             %% save to cache
-            save_dns_result_to_table(ReplyPacket)
-    after 2000 ->
-	    io:format("### query dns ~p time out.~n", [DNSServerIP])
-    end,
-    gen_udp:close(S).
+            save_dns_result_to_table(ReplyPacket);
+	{error, _Reason} ->
+	    io:format("!!! type:~p ~p class:~p query dns error ~p.~n",
+		      [Type, Domain, Class, _Reason])
+    end.
 
 
 handle_dns_header(#dns_header{id=_Id,qr=_RespFlag,opcode=_OpCode,rcode=_RCode}) ->
