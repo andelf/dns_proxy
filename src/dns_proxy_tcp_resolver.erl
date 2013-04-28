@@ -12,9 +12,7 @@
 
 %% API
 -export([start_link/1]).
--export([query_domain/1,
-	 query_domain/2,
-	 query_domain/3]).
+
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
 	 terminate/2, code_change/3]).
@@ -28,32 +26,11 @@
 %%%===================================================================
 %%% API
 %%%===================================================================
-
-%%--------------------------------------------------------------------
-%% @doc
-%% Starts the server
-%%
-%% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
-%% @end
-%%--------------------------------------------------------------------
 start_link(Args) ->
     %% register with name
-    gen_server:start_link({local, ?SERVER}, ?MODULE, Args, []).
-    %% gen_server:start_link(?MODULE, Args, []).
+    %% gen_server:start_link({local, ?SERVER}, ?MODULE, Args, []).
+    gen_server:start_link(?MODULE, Args, []).
 
-
-query_domain(Domain) ->
-    query_domain(Domain, a).
-query_domain(Domain, Type) ->
-    query_domain(Domain, Type, in).
-query_domain(Domain, Type, Class) ->
-    %% make new dns_rec
-    Id = random_id(),
-    Packet = new_query_dns_rec(Id),
-    %% fill dns_query
-    Packet1 = Packet#dns_rec{qdlist=[#dns_query{domain=Domain, type=Type,
-						class=Class}]},
-    gen_server:call(?SERVER, {sync_send_dns_packet, Packet1}).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -73,8 +50,14 @@ query_domain(Domain, Type, Class) ->
 init([]) ->
     {stop, "conf can't be empty"};
 init(Args) ->
-    {ok, IP} = inet:ip(proplists:get_value(ip, Args)),
-    Port = proplists:get_value(port, Args, 53),
+    case proplists:get_value(ip, Args) of
+	undefined ->
+	    IPAddr = dns_utils:random_select(proplists:get_value(ip_pool, Args));
+	_IP ->
+	    IPAddr = _IP
+    end,
+    {ok, IP} = inet:ip(IPAddr),
+    Port = 53,
     Timeout = proplists:get_value(timeout, Args, 5000),
     {ok, Sock} = gen_tcp:connect(IP, Port, [binary,{active,false},
 					   {keepalive, true}]),
@@ -188,24 +171,3 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-new_query_dns_rec(Id) ->
-    #dns_rec{header=#dns_header{id=Id,
-				qr=false, %% query response
-				opcode='query',
-				aa=false, %% :1   authoritive answer
-				tc=false, %% :1   truncated message
-				rd=true,  %% :1   recursion desired 
-				ra=false, %% :1   recursion available
-				pr=false, %% :1   primary server required (non standard)
-				rcode=0}, %% :4   response code
-	     qdlist = [],  %% list of question entries
-	     anlist = [],  %% list of answer entries
-	     nslist = [],  %% list of authority entries
-	     arlist = []   %% list of resource entries
-	    }.
-
-
-random_id() ->
-    random:uniform(65535).
-
-    

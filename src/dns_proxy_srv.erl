@@ -229,7 +229,7 @@ handle_dns_packet(#dns_rec{header=Header, qdlist=Questions,
 
 query_dns_and_send_response(Packet, SendFunc) ->
     {ok, S} = gen_udp:open(0, [binary]),
-    {ok, DNSServerIP} = inet:ip(random_select(?DNS_ADDRS)),
+    {ok, DNSServerIP} = inet:ip(dns_utils:random_select(?DNS_ADDRS)),
     gen_udp:send(S, DNSServerIP, 53, inet_dns:encode(Packet)),
     receive
 	{udp, S, DNSServerIP, 53, Data} ->
@@ -319,10 +319,6 @@ dns_rec_requst_to_response(Packet) ->
 dns_rec_fill_answer(Packet, Answers) when is_list(Answers) ->
     Packet#dns_rec{anlist=Answers}.
 
-random_select(AList) ->
-    random:seed(now()),
-    lists:nth(random:uniform(length(AList)), AList).
-
 dns_rec_filter_bad_records(Response = #dns_rec{anlist=Records}) ->
     Records1 = lists:filter(fun(#dns_rr{type=a, data={202,106,199,_}}) -> % chinaunicom, beijing
                                     false;
@@ -339,11 +335,6 @@ dns_rec_filter_bad_records(Response = #dns_rec{anlist=Records}) ->
         _ ->
             Response#dns_rec{anlist=Records1}
     end.
-
-timestamp() ->
-    timestamp(now()).
-timestamp({M,S,_}) ->
-    M * 1000000 + S.
 
 table_query(Domain) ->
     %% fun2ms is bad here
@@ -363,7 +354,7 @@ dns_rr_to_table_obj(#dns_rr{domain=Domain, type=Type, class=Class, data=Data}) -
     %% key
     %%{{Domain, Type, Class}, Data}.
     #table_record{dns_record = #dns_record{domain=Domain, type=Type, class=Class, data=Data},
-		  timestamp = timestamp()
+		  timestamp = dns_utils:timestamp()
 		 }.
 
 dns_record_to_dns_rr(#dns_record{domain=Domain, type=Type, class=Class, data=Data}) ->

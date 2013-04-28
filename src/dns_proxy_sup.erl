@@ -24,6 +24,7 @@ start_link() ->
 %% ===================================================================
 
 init([]) ->
-    Children = [?CHILD(dns_proxy_srv, worker)],
+    Children = [?CHILD(dns_proxy_srv, worker),
+		?CHILD(dns_proxy_resolver_sup, supervisor)],
     {ok, { {one_for_one, 5, 10}, Children} }.
 
