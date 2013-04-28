@@ -11,7 +11,8 @@
 -behaviour(supervisor).
 
 %% API
--export([start_link/0, query_domain/1, query_domain/2, query_domain/3]).
+-export([start_link/0,
+	 query_domain/1, query_domain/2, query_domain/3, query_domain/4]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -47,8 +48,6 @@ query_domain(Domain, Type) ->
 query_domain(Domain, Type, Class) ->
     query_domain(udp_resolver_pool, Domain, Type, Class).
 query_domain(PoolName, Domain, Type, Class) ->
-  
-
     Id = dns_utils:random_id(),
     Packet = dns_utils:new_query_dns_rec(Id),
     %% fill dns_query

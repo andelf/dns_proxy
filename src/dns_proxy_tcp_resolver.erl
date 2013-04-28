@@ -19,9 +19,11 @@
 
 -include_lib("kernel/src/inet_dns.hrl").
 -define(SERVER, ?MODULE). 
-
+-define(SOCK_TIMEOUT, 1000).
 -record(state, {sock,
-		timeout}).
+		timeout,
+		server_ip,
+		server_port}).
 
 %%%===================================================================
 %%% API
@@ -58,11 +60,11 @@ init(Args) ->
     end,
     {ok, IP} = inet:ip(IPAddr),
     Port = 53,
-    Timeout = proplists:get_value(timeout, Args, 5000),
-    {ok, Sock} = gen_tcp:connect(IP, Port, [binary,{active,false},
-					   {keepalive, true}]),
-    io:format("got sock ~p~n", [Sock]),
-    {ok, #state{sock=Sock, timeout=Timeout}}.
+    Timeout = proplists:get_value(timeout, Args, 6000),
+    %% {ok, Sock} = gen_tcp:connect(IP, Port, [binary,{active,false}]),
+    %% io:format("got sock ~p~n", [Sock]),
+    {ok, #state{timeout=Timeout,
+		server_ip=IP, server_port=Port}}.
 
 
 %%--------------------------------------------------------------------
@@ -80,13 +82,18 @@ init(Args) ->
 %% @end
 %%--------------------------------------------------------------------
 handle_call({sync_send_dns_packet, Packet}, _From, State =
-		#state{sock=Sock,timeout=Timeout}) when is_record(Packet, dns_rec) ->
+		#state{timeout=Timeout, server_ip=IP,
+		       server_port=Port}) when is_record(Packet, dns_rec) ->
+    {ok, Sock} = gen_tcp:connect(IP, Port, [binary,{active,false},
+					    {keepalive, true}]),
+
     Id = (Packet#dns_rec.header)#dns_header.id,
     Raw = inet_dns:encode(Packet),
     ok = gen_tcp:send(Sock, <<(byte_size(Raw)):16, Raw/binary>>),
-    io:format("waiting reply~n"),
     Reply = handle_dns_response(Sock, Id, Timeout),
+    gen_tcp:close(Sock),
     {reply, Reply, State}.
+
 
 
 handle_dns_response(Sock, Id, Timeout) ->
@@ -95,6 +102,8 @@ handle_dns_response(Sock, Id, Timeout) ->
 	    Packet;
 	{error, timeout} ->
 	    {error, timeout};
+	{error, closed} -> 
+	    {error, closed};
 	{'EXIT', _} = E->
 	    %% skip bad packets in buffer
 	    io:format("error ~p~n", [E]),
@@ -103,18 +112,21 @@ handle_dns_response(Sock, Id, Timeout) ->
 
 
 receive_dns_response(Sock, Id, Timeout) ->
-    {ok, <<Size:16>>} = gen_tcp:recv(Sock, 2, Timeout),
-    io:format("size = ~p~n", [Size]),
-    case gen_tcp:recv(Sock, Size) of
-	{ok, Data} ->
-	    {ok, Packet} = inet_dns:decode(Data, Timeout),
-	    #dns_rec{header = #dns_header{id = Id, qr = true}} = Packet,
-	    {ok, Packet};
-	{error, timeout} ->
-	    {error, timeout};
-	{error, Other} ->
-	    io:format("error ~p~n", [Other]),
-	    {error, Other}
+    case gen_tcp:recv(Sock, 2, Timeout) of
+	{ok, <<Size:16>>} ->
+	    case gen_tcp:recv(Sock, Size) of
+		{ok, Data} ->
+		    {ok, Packet} = inet_dns:decode(Data),
+		    #dns_rec{header = #dns_header{id = Id, qr = true}} = Packet,
+		    {ok, Packet};
+		{error, timeout} ->
+		    {error, timeout};
+		{error, Other} ->
+		    io:format("error ~p~n", [Other]),
+		    {error, Other}
+	    end;
+	{error, _} = E->
+	    throw(E)
     end.
 %%--------------------------------------------------------------------
 %% @private
