@@ -71,8 +71,8 @@ query_packet(PoolName, Packet) ->
 			fun(Worker) ->
 				gen_server:call(Worker, {sync_send_dns_packet, Packet})
 			end).
-    
-    
+
+
 
 %%%===================================================================
 %%% Supervisor callbacks
@@ -97,7 +97,7 @@ init([]) ->
 	      [{ip_pool, ?DNS_ADDRS}]},
 	     {tcp_resolver_pool, [{worker_module, dns_proxy_tcp_resolver},
 				  {size, 5}, {max_overflow, 10}],
-	      [{ip_pool, ["202.106.196.115", "202.106.0.20"]}]}],
+	      [{ip_pool, ["8.8.8.8", "8.8.4.4"]}]}],
 
     RestartStrategy = one_for_one,
     MaxRestarts = 10,
