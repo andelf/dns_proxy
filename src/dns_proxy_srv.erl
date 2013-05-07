@@ -49,7 +49,7 @@
 %% what really store to table
 -record(table_record, {dns_record,
 		       timestamp,
-		       visits=0}).		       
+		       visits=0}).
 %%%===================================================================
 %%% API
 %%%===================================================================
@@ -223,7 +223,7 @@ fill_packet_and_send_response(Packet=#dns_rec{qdlist=Questions}, Cached, SendFun
 
 query_dns_and_send_response(Packet=#dns_rec{qdlist=Questions}, SendFunc) ->
     [#dns_query{domain=Domain,type=Type,class=Class}] = Questions,
-    case dns_proxy_resolver_sup:query_packet(tcp_resolver_pool, Packet) of
+    case dns_proxy_resolver_sup:query_packet(udp_resolver_pool, Packet) of
 	{ok, ReplyPacket} ->
             %% io:format("got dns reply packet ~p~n", [ReplyPacket]),
             ReplyPacket1 = dns_rec_filter_bad_records(ReplyPacket),
