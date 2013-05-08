@@ -11,7 +11,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/0, sync/0]).
+-export([start_link/0, sync/0, stat/0]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -67,6 +67,8 @@ start_link() ->
 sync() ->
     gen_server:call(?MODULE, {dump_db}).
 
+stat() ->
+    ets:info(?RESOLVE_TABLE).
 
 %%%===================================================================
 %%% gen_server callbacks
