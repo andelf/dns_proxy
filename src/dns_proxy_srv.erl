@@ -11,7 +11,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/0, sync/0, stat/0]).
+-export([start_link/0, sync/0, stat/0, delete_domain/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -69,6 +69,15 @@ sync() ->
 
 stat() ->
     ets:info(?RESOLVE_TABLE).
+
+delete_domain(Domain) ->
+    Result = ets:select(?RESOLVE_TABLE,
+			ets:fun2ms(fun(R = #table_record{
+					      dns_record=#dns_record{domain=D},
+					      timestamp=_T}) when D =:= Domain ->
+					   R end)),
+    lists:map(fun (R) -> ets:delete_object(?RESOLVE_TABLE, R) end,  Result).
+
 
 %%%===================================================================
 %%% gen_server callbacks
