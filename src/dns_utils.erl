@@ -18,12 +18,12 @@
 %%%===================================================================
 
 random_select(AList) ->
-    random:seed(now()),
-    lists:nth(random:uniform(length(AList)), AList).
+    rand:seed(erlang:timestamp()),
+    lists:nth(rand:uniform(length(AList)), AList).
 
 
 timestamp() ->
-    timestamp(now()).
+    timestamp(erlang:timestamp()).
 timestamp({M,S,_}) ->
     M * 1000000 + S.
 
@@ -33,7 +33,7 @@ new_query_dns_rec(Id) ->
 				opcode='query',
 				aa=false, %% :1   authoritive answer
 				tc=false, %% :1   truncated message
-				rd=true,  %% :1   recursion desired 
+				rd=true,  %% :1   recursion desired
 				ra=false, %% :1   recursion available
 				pr=false, %% :1   primary server required (non standard)
 				rcode=0}, %% :4   response code
@@ -45,7 +45,7 @@ new_query_dns_rec(Id) ->
 
 
 random_id() ->
-    random:uniform(65535).
+    rand:uniform(65535).
 
 
 
